@@ -1,5 +1,0 @@
-# requirements.txt
-
-# System dependencies (not installable via pip):
-# - python3-tk (for Debian/Ubuntu-based systems)
-python3-tk
