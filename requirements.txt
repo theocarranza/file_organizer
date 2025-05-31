@@ -1,5 +1,5 @@
-# requirements.txt
-
-# System dependencies (not installable via pip):
-# - python3-tk (for Debian/Ubuntu-based systems)
-python3-tk
+autopep8==2.3.2
+flake8==7.2.0
+mccabe==0.7.0
+pycodestyle==2.13.0
+pyflakes==3.3.2
