@@ -307,6 +307,7 @@ class CustomConfirmationDialog(tk.Toplevel):
         self.transient(parent) # Make this dialog transient for the parent
         self.grab_set() # Make it modal
         self.result = False # Default result
+        self.compress_output = tk.BooleanVar(self, value=False) # New: Variable for the checkbox
 
         self.title("Confirm Organization")
         self.resizable(False, True) # Allow vertical resizing if needed, but not horizontal
@@ -340,6 +341,10 @@ class CustomConfirmationDialog(tk.Toplevel):
         # Using a Label with wraplength and allowing the window to resize is simpler
         message_label = ttk.Label(content_frame, text=message_text, wraplength=500, justify="left")
         message_label.pack(pady=(0, 20), fill="both", expand=True) # Allow label to expand
+
+        # New: Checkbox for compression
+        compress_checkbox = ttk.Checkbutton(content_frame, text="Compress output (.tar.xz)", variable=self.compress_output)
+        compress_checkbox.pack(pady=(5, 15), anchor="w") # Anchor west for left alignment
 
         # Buttons
         button_frame = ttk.Frame(content_frame)
@@ -381,7 +386,7 @@ class CustomConfirmationDialog(tk.Toplevel):
 
     def show(self):
         self.parent.wait_window(self) # Wait until the dialog is closed
-        return self.result
+        return self.result, self.compress_output.get() # New: Return checkbox state
 
 # --- GUI for folder selection ---
 def select_folder_and_run():
@@ -403,7 +408,7 @@ def select_folder_and_run():
     if folder_selected: # If a folder was selected
         # Use custom confirmation dialog
         confirm_dialog = CustomConfirmationDialog(root, folder_selected)
-        confirm = confirm_dialog.show()
+        confirm, compress_checked = confirm_dialog.show() # New: Capture checkbox state
 
         if confirm:
             # --- Pre-scan to count files for progress bar ---
@@ -443,7 +448,6 @@ def select_folder_and_run():
             progress_bar.pack(pady=5)
 
             # Start the organization process
-            # Pass GUI elements to the organize function
             processed, copied, duplicates, errors, output_path = organize_files_in_folder(
                 folder_selected, progress_bar, status_label, total_files
             )
@@ -451,12 +455,91 @@ def select_folder_and_run():
             # Close the progress window after completion
             progress_window.destroy()
 
+            # --- New: Compression Logic ---
+            compressed_archive_path = None
+            if compress_checked and output_path:
+                try:
+                    # Update status label for compression
+                    compression_status_window = tk.Toplevel(root)
+                    compression_status_window.title("Compressing Output...")
+                    compression_status_window.geometry("300x100") # Increased height for progress bar
+                    compression_status_window.resizable(False, False)
+                    compression_status_window.protocol("WM_DELETE_WINDOW", lambda: None) # Disable close button
+
+                    x = root.winfo_x() + (root.winfo_width() // 2) - (compression_status_window.winfo_width() // 2)
+                    y = root.winfo_y() + (root.winfo_height() // 2) - (compression_status_window.winfo_height() // 2)
+                    compression_status_window.geometry(f"+{x}+{y}")
+
+                    compression_label = tk.Label(compression_status_window, text="Compressing files, please wait...", pady=10)
+                    compression_label.pack()
+
+                    # New: Indeterminate Progress Bar for Compression
+                    compression_progress_bar = ttk.Progressbar(compression_status_window, orient="horizontal", length=250, mode="indeterminate")
+                    compression_progress_bar.pack(pady=5)
+                    compression_progress_bar.start(10) # Start animation, update every 10ms
+
+                    compression_status_window.update_idletasks()
+                    compression_status_window.lift()
+                    compression_status_window.attributes('-topmost', True)
+                    compression_status_window.focus_force()
+                    compression_status_window.after_idle(compression_status_window.attributes, '-topmost', False)
+
+                    if VERBOSE_MODE:
+                        print(f"\nCompression requested. Compressing '{output_path.encode('utf-8', errors='replace').decode('utf-8')}'...")
+
+                    # shutil.make_archive will create the archive in the parent directory of output_path
+                    # The base_name will be the name of the output folder itself
+                    archive_base_name = os.path.basename(output_path)
+                    archive_parent_dir = os.path.dirname(output_path)
+
+                    compressed_archive_path = shutil.make_archive(
+                        base_name=os.path.join(archive_parent_dir, archive_base_name),
+                        format='xztar', # For high compression
+                        root_dir=output_path # The directory to archive
+                    )
+                    if VERBOSE_MODE:
+                        print(f"Successfully created archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}")
+
+                    compression_progress_bar.stop() # Stop animation
+                    compression_status_window.destroy() # Close compression status window
+
+                    # Optional: Ask to delete original uncompressed folder
+                    if messagebox.askyesno("Compression Complete",
+                                            f"Output compressed to:\n{compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
+                                            "Do you want to delete the original uncompressed folder?") :
+                        try:
+                            shutil.rmtree(output_path)
+                            if VERBOSE_MODE:
+                                print(f"Deleted original uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+                        except Exception as e:
+                            messagebox.showerror("Cleanup Error", f"Failed to delete original folder: {e}")
+                            if VERBOSE_MODE:
+                                print(f"Error deleting original folder: {e}")
+
+                except Exception as e:
+                    errors.append(f"Error during compression: {e}")
+                    if VERBOSE_MODE:
+                        print(f"Error during compression: {e}")
+                    # Ensure progress bar is stopped and window is destroyed even on error
+                    if 'compression_progress_bar' in locals() and compression_progress_bar.winfo_exists():
+                        compression_progress_bar.stop()
+                    if 'compression_status_window' in locals() and compression_status_window.winfo_exists():
+                        compression_status_window.destroy()
+
+
+            # --- Final Summary Message ---
             summary_message = f"File organization process complete!\n\n" \
                               f"Original folder scanned: {folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n" \
-                              f"Output generated in: {output_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n" \
-                              f"Total files processed: {processed}\n" \
-                              f"Files copied to type folders: {copied}\n" \
-                              f"Duplicate files copied to '{DUPLICATES_FOLDER_NAME}': {duplicates}\n\n"
+                              f"Output generated in: {output_path.encode('utf-8', errors='replace').decode('utf-8')}\n"
+
+            if compressed_archive_path:
+                summary_message += f"Compressed archive created: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
+            else:
+                summary_message += "\n" # Add a newline if no compression
+
+            summary_message += f"Total files processed: {processed}\n" \
+                               f"Files copied to type folders: {copied}\n" \
+                               f"Duplicate files copied to '{DUPLICATES_FOLDER_NAME}': {duplicates}\n\n"
 
             if errors:
                 summary_message += f"Errors encountered during process ({len(errors)}):\n"
@@ -512,6 +595,27 @@ if __name__ == "__main__":
                     print("\nErrors encountered:")
                     for error in errors:
                         print(f"- {error}")
+
+                # CLI mode compression (no checkbox, always compress if output exists)
+                # For CLI, we'll assume compression is desired if the output path is valid
+                if output_path:
+                    try:
+                        print(f"\nCLI mode: Compressing '{output_path.encode('utf-8', errors='replace').decode('utf-8')}'...")
+                        archive_base_name = os.path.basename(output_path)
+                        archive_parent_dir = os.path.dirname(output_path)
+                        compressed_archive_path = shutil.make_archive(
+                            base_name=os.path.join(archive_parent_dir, archive_base_name),
+                            format='xztar',
+                            root_dir=output_path
+                        )
+                        print(f"Successfully created compressed archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}")
+                        # Optional: Delete original uncompressed folder in CLI mode
+                        # if input("Delete original uncompressed folder? (y/n): ").lower() == 'y':
+                        #     shutil.rmtree(output_path)
+                        #     print(f"Original folder '{output_path.encode('utf-8', errors='replace').decode('utf-8')}' deleted.")
+                    except Exception as e:
+                        print(f"Error during CLI compression: {e}")
+
     else:
         # Fallback to GUI mode if no folder_path is provided and GUI is available
         if 'DISPLAY' in os.environ or os.name == 'nt': # Basic check for GUI environment
