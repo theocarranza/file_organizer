@@ -3,22 +3,20 @@ import shutil
 import hashlib
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from tkinter import ttk # Import ttk for themed widgets like Progressbar
+from tkinter import ttk
 from datetime import datetime
-import argparse # Import argparse for command-line argument parsing
+import argparse
 
 # --- Configuration ---
-# You can change these default folder names if you like
 DUPLICATES_FOLDER_NAME = "duplicates"
-NO_EXTENSION_FOLDER_NAME = "_no_extension_" # For files without a discernible extension
-HIDDEN_OR_CONFIG_FOLDER_NAME = "_hidden_or_config_" # For files like .bashrc (starting with a dot, no extension after)
-OTHER_FOLDER_NAME = "other" # For files not belonging to any specific group
+NO_EXTENSION_FOLDER_NAME = "_no_extension_"
+HIDDEN_OR_CONFIG_FOLDER_NAME = "_hidden_or_config_"
+OTHER_FOLDER_NAME = "other"
 
 # Global flag for verbose mode, set by command-line arguments
 VERBOSE_MODE = False
 
 # --- File Type Grouping ---
-# Define major categories and the extensions that belong to them
 FILE_TYPE_GROUPS = {
     "images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".ico", ".svg"],
     "documents": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv", ".md", ".json", ".xml"],
@@ -163,7 +161,7 @@ def count_files_in_folder(target_folder_path):
     return count
 
 
-def organize_files_in_folder(target_folder_path, progress_bar=None, status_label=None, total_files_to_process=0):
+def organize_files_in_folder(target_folder_path, destination_root_folder, progress_bar=None, status_label=None, total_files_to_process=0):
     """
     Organizes files in the specified folder and its subfolders by type and handles duplicates.
     All organized files and duplicates are COPIED to subfolders directly under a new timestamped output folder.
@@ -175,16 +173,22 @@ def organize_files_in_folder(target_folder_path, progress_bar=None, status_label
     duplicate_files_count = 0
 
     if not os.path.isdir(target_folder_path):
-        error_messages.append(f"The path '{target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory.")
+        error_messages.append(f"The source path '{target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory.")
         return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
+
+    if not os.path.isdir(destination_root_folder):
+        if not create_directory_if_not_exists(destination_root_folder, error_messages):
+            error_messages.append(f"The destination path '{destination_root_folder.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory and could not be created.")
+            return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
+
 
     # --- 1. Setup New Output Folder ---
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     original_folder_name = os.path.basename(target_folder_path)
-    parent_dir = os.path.dirname(target_folder_path)
 
     root_output_folder_name = f"file_organizer_{original_folder_name}_{timestamp}"
-    root_output_folder_path = os.path.join(parent_dir, root_output_folder_name)
+    # The organized output folder will be created INSIDE the user-selected destination_root_folder
+    root_output_folder_path = os.path.join(destination_root_folder, root_output_folder_name)
 
     if not create_directory_if_not_exists(root_output_folder_path, error_messages):
         return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
@@ -203,11 +207,11 @@ def organize_files_in_folder(target_folder_path, progress_bar=None, status_label
         progress_bar['maximum'] = total_files_to_process
         current_file_index = 0
         if VERBOSE_MODE:
-            print(f"\nStarting recursive file organization in: {target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
+            print(f"\nStarting recursive file organization from: {target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
             print(f"Output will be generated in: {root_output_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
             print("--------------------------------------------------")
     elif VERBOSE_MODE: # Only print this if not in GUI mode but verbose is on
-        print(f"\nStarting recursive file organization in: {target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
+        print(f"\nStarting recursive file organization from: {target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
         print(f"Output will be generated in: {root_output_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
         print("--------------------------------------------------")
 
@@ -301,54 +305,47 @@ def organize_files_in_folder(target_folder_path, progress_bar=None, status_label
 
 # --- Custom Confirmation Dialog ---
 class CustomConfirmationDialog(tk.Toplevel):
-    def __init__(self, parent, folder_path):
+    def __init__(self, parent, source_folder_path, destination_folder_path):
         super().__init__(parent)
-        self.parent = parent # Store the parent reference
-        self.transient(parent) # Make this dialog transient for the parent
-        self.grab_set() # Make it modal
-        self.result = False # Default result
-        self.compress_output = tk.BooleanVar(self, value=False) # New: Variable for the checkbox
+        self.parent = parent
+        self.transient(parent)
+        self.grab_set()
+        self.result = False
+        self.compress_output = tk.BooleanVar(self, value=False)
 
         self.title("Confirm Organization")
-        self.resizable(False, True) # Allow vertical resizing if needed, but not horizontal
+        self.resizable(False, True)
 
-        # Styling
         style = ttk.Style()
         style.configure("TLabel", font=("Arial", 10), padding=5)
         style.configure("TButton", font=("Arial", 10, "bold"), padding=8)
         style.configure("Header.TLabel", font=("Arial", 12, "bold"))
 
-        # Frame for content
         content_frame = ttk.Frame(self, padding=15)
         content_frame.pack(expand=True, fill="both")
 
         header_label = ttk.Label(content_frame, text="Confirm File Organization", style="Header.TLabel")
         header_label.pack(pady=(0, 10))
 
-        # Message details
         message_text = f"Are you sure you want to organize files from:\n" \
-                       f"•  {folder_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n" \
-                       f"This will recursively COPY files from this folder and all its subfolders.\n" \
+                       f"•  Source: {source_folder_path.encode('utf-8', errors='replace').decode('utf-8')}\n" \
+                       f"•  Destination: {destination_folder_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n" \
+                       f"This will recursively COPY files from the source folder and all its subfolders.\n" \
                        f"Files will be organized into main categories (e.g., 'images', 'documents') " \
                        f"with subfolders for specific extensions (e.g., 'images/jpg').\n" \
                        f"Less common file types will be grouped under an '{OTHER_FOLDER_NAME}' folder.\n" \
                        f"Duplicates will be copied to a '{DUPLICATES_FOLDER_NAME}' folder.\n\n" \
-                       f"A NEW output folder will be created in the parent directory of " \
-                       f"'{os.path.basename(folder_path).encode('utf-8', errors='replace').decode('utf-8')}' " \
-                       f"to contain all organized files.\n\n" \
+                       f"A NEW timestamped output folder will be created inside the chosen destination." \
                        f"It's highly recommended to BACK UP YOUR FILES before proceeding."
 
-        # Using a Label with wraplength and allowing the window to resize is simpler
         message_label = ttk.Label(content_frame, text=message_text, wraplength=500, justify="left")
-        message_label.pack(pady=(0, 20), fill="both", expand=True) # Allow label to expand
+        message_label.pack(pady=(0, 20), fill="both", expand=True)
 
-        # New: Checkbox for compression
-        compress_checkbox = ttk.Checkbutton(content_frame, text="Compress output (.tar.xz)", variable=self.compress_output)
-        compress_checkbox.pack(pady=(5, 15), anchor="w") # Anchor west for left alignment
+        compress_checkbox = ttk.Checkbutton(content_frame, text="Compress output (.tar.xz) and delete uncompressed folder", variable=self.compress_output)
+        compress_checkbox.pack(pady=(5, 15), anchor="w")
 
-        # Buttons
         button_frame = ttk.Frame(content_frame)
-        button_frame.pack(pady=(10, 0)) # Pack at the bottom
+        button_frame.pack(pady=(10, 0))
 
         yes_button = ttk.Button(button_frame, text="Yes, Proceed", command=self._on_yes)
         yes_button.pack(side="left", padx=10)
@@ -356,16 +353,14 @@ class CustomConfirmationDialog(tk.Toplevel):
         no_button = ttk.Button(button_frame, text="No, Cancel", command=self._on_no)
         no_button.pack(side="right", padx=10)
 
-        self.protocol("WM_DELETE_WINDOW", self._on_no) # Handle window close button
+        self.protocol("WM_DELETE_WINDOW", self._on_no)
 
-        # --- Dynamic sizing and centering ---
-        self.update_idletasks() # Force widgets to compute their sizes
+        self.update_idletasks()
         width = self.winfo_reqwidth()
         height = self.winfo_reqheight()
 
-        # Add some padding to the requested dimensions and ensure minimums
-        width = max(width + 30, 550) # Add 30px padding, ensure minimum width
-        height = max(height + 30, 300) # Add 30px padding, ensure minimum height to prevent tiny windows
+        width = max(width + 30, 550)
+        height = max(height + 30, 350) # Slightly increased height
 
         x = self.parent.winfo_x() + (self.parent.winfo_width() // 2) - (width // 2)
         y = self.parent.winfo_y() + (self.parent.winfo_height() // 2) - (height // 2)
@@ -385,86 +380,109 @@ class CustomConfirmationDialog(tk.Toplevel):
         self.destroy()
 
     def show(self):
-        self.parent.wait_window(self) # Wait until the dialog is closed
-        return self.result, self.compress_output.get() # New: Return checkbox state
+        self.parent.wait_window(self)
+        return self.result, self.compress_output.get()
 
 # --- GUI for folder selection ---
 def select_folder_and_run():
     """
-    Opens a dialog to select a folder and then runs the organization script.
+    Opens dialogs to select source and destination folders, then runs the organization script.
     """
     root = tk.Tk()
-    # Instead of root.withdraw(), make it tiny and off-screen
-    root.geometry("1x1+2000+2000") # Position far off-screen
-    root.overrideredirect(True) # Remove window decorations (title bar, etc.)
-    # root.withdraw() # Old way
+    root.geometry("1x1+2000+2000")
+    root.overrideredirect(True)
 
-    # Add a verbose print here
     if VERBOSE_MODE:
-        print("Launching folder selection dialog. Please look for a popup window.")
+        print("Launching source folder selection dialog.")
 
-    folder_selected = filedialog.askdirectory(title="Select Folder to Organize (and its subfolders)")
+    source_folder_selected = filedialog.askdirectory(title="Select SOURCE Folder to Organize (and its subfolders)")
 
-    if folder_selected: # If a folder was selected
-        # Use custom confirmation dialog
-        confirm_dialog = CustomConfirmationDialog(root, folder_selected)
-        confirm, compress_checked = confirm_dialog.show() # New: Capture checkbox state
+    if not source_folder_selected:
+        messagebox.showinfo("Cancelled", "No source folder selected. File organization cancelled.")
+        root.destroy()
+        return
 
-        if confirm:
-            # --- Pre-scan to count files for progress bar ---
-            total_files = count_files_in_folder(folder_selected)
-            if total_files == 0:
-                messagebox.showinfo("No Files Found", "No files found in the selected folder or its subfolders to organize.")
-                root.destroy() # Destroy root before returning
-                return
+    # New: Ask for Destination Folder
+    if VERBOSE_MODE:
+        print("Launching destination folder selection dialog.")
 
-            # --- Create Progress Window ---
-            progress_window = tk.Toplevel(root)
-            progress_window.title("Organizing Files...")
-            # Set a reasonable initial size for the progress window
-            progress_window.geometry("400x100")
-            progress_window.resizable(False, False)
-            progress_window.protocol("WM_DELETE_WINDOW", lambda: None) # Disable close button
+    # Suggest parent of source_folder_selected as default
+    initial_dir_for_dest = os.path.dirname(source_folder_selected)
 
-            # Center the progress window
-            root.update_idletasks() # Ensure window dimensions are calculated
-            x = root.winfo_x() + (root.winfo_width() // 2) - (progress_window.winfo_width() // 2)
-            y = root.winfo_y() + (root.winfo_height() // 2) - (progress_window.winfo_height() // 2)
-            progress_window.geometry(f"+{x}+{y}")
+    destination_folder_selected = filedialog.askdirectory(
+        title="Select DESTINATION Folder for the Organized Output",
+        initialdir=initial_dir_for_dest
+    )
 
-            # Bring progress window to front and give focus
-            progress_window.lift()
-            progress_window.attributes('-topmost', True) # Keep it on top
-            progress_window.focus_force() # Force focus
-            # Release topmost after a short delay to allow other windows to come up if needed later
-            progress_window.after_idle(progress_window.attributes, '-topmost', False)
+    if not destination_folder_selected:
+        messagebox.showinfo("Cancelled", "No destination folder selected. File organization cancelled.")
+        root.destroy()
+        return
 
-            # Progress Label
-            status_label = tk.Label(progress_window, text="Preparing...", pady=10)
-            status_label.pack()
+    # Check if source and destination are the same (or very similar)
+    if os.path.abspath(source_folder_selected) == os.path.abspath(destination_folder_selected):
+        warning_result = messagebox.askyesno(
+            "Warning: Same Source and Destination",
+            "You have selected the same folder for both source and destination.\n\n"
+            "This will create a new timestamped organization folder directly inside the source folder.\n"
+            "While this is generally safe, it's often better to choose a separate destination.\n\n"
+            "Do you want to proceed anyway?"
+        )
+        if not warning_result:
+            messagebox.showinfo("Cancelled", "File organization cancelled by user due to same source/destination.")
+            root.destroy()
+            return
 
-            # Progress Bar
-            progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=300, mode="determinate")
-            progress_bar.pack(pady=5)
 
-            # Start the organization process
-            processed, copied, duplicates, errors, output_path = organize_files_in_folder(
-                folder_selected, progress_bar, status_label, total_files
-            )
+    # Use custom confirmation dialog
+    confirm_dialog = CustomConfirmationDialog(root, source_folder_selected, destination_folder_selected)
+    confirm, compress_checked = confirm_dialog.show()
 
-            # Close the progress window after completion
-            progress_window.destroy()
+    if confirm:
+        total_files = count_files_in_folder(source_folder_selected)
+        if total_files == 0:
+            messagebox.showinfo("No Files Found", "No files found in the selected source folder or its subfolders to organize.")
+            root.destroy()
+            return
 
-            # --- New: Compression Logic ---
-            compressed_archive_path = None
-            if compress_checked and output_path:
+        progress_window = tk.Toplevel(root)
+        progress_window.title("Organizing Files...")
+        progress_window.geometry("400x100")
+        progress_window.resizable(False, False)
+        progress_window.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        root.update_idletasks()
+        x = root.winfo_x() + (root.winfo_width() // 2) - (progress_window.winfo_width() // 2)
+        y = root.winfo_y() + (root.winfo_height() // 2) - (progress_window.winfo_height() // 2)
+        progress_window.geometry(f"+{x}+{y}")
+
+        progress_window.lift()
+        progress_window.attributes('-topmost', True)
+        progress_window.focus_force()
+        progress_window.after_idle(progress_window.attributes, '-topmost', False)
+
+        status_label = tk.Label(progress_window, text="Preparing...", pady=10)
+        status_label.pack()
+
+        progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=300, mode="determinate")
+        progress_bar.pack(pady=5)
+
+        # Pass the destination_folder_selected to the organization logic
+        processed, copied, duplicates, errors, output_path = organize_files_in_folder(
+            source_folder_selected, destination_folder_selected, progress_bar, status_label, total_files
+        )
+
+        progress_window.destroy()
+
+        compressed_archive_path = None
+        if output_path: # Ensure organization actually produced an output folder
+            if compress_checked:
                 try:
-                    # Update status label for compression
                     compression_status_window = tk.Toplevel(root)
                     compression_status_window.title("Compressing Output...")
-                    compression_status_window.geometry("300x100") # Increased height for progress bar
+                    compression_status_window.geometry("300x100")
                     compression_status_window.resizable(False, False)
-                    compression_status_window.protocol("WM_DELETE_WINDOW", lambda: None) # Disable close button
+                    compression_status_window.protocol("WM_DELETE_WINDOW", lambda: None)
 
                     x = root.winfo_x() + (root.winfo_width() // 2) - (compression_status_window.winfo_width() // 2)
                     y = root.winfo_y() + (root.winfo_height() // 2) - (compression_status_window.winfo_height() // 2)
@@ -473,10 +491,9 @@ def select_folder_and_run():
                     compression_label = tk.Label(compression_status_window, text="Compressing files, please wait...", pady=10)
                     compression_label.pack()
 
-                    # New: Indeterminate Progress Bar for Compression
                     compression_progress_bar = ttk.Progressbar(compression_status_window, orient="horizontal", length=250, mode="indeterminate")
                     compression_progress_bar.pack(pady=5)
-                    compression_progress_bar.start(10) # Start animation, update every 10ms
+                    compression_progress_bar.start(10)
 
                     compression_status_window.update_idletasks()
                     compression_status_window.lift()
@@ -487,55 +504,49 @@ def select_folder_and_run():
                     if VERBOSE_MODE:
                         print(f"\nCompression requested. Compressing '{output_path.encode('utf-8', errors='replace').decode('utf-8')}'...")
 
-                    # shutil.make_archive will create the archive in the parent directory of output_path
-                    # The base_name will be the name of the output folder itself
                     archive_base_name = os.path.basename(output_path)
-                    archive_parent_dir = os.path.dirname(output_path)
+                    archive_parent_dir = os.path.dirname(output_path) # This is the destination_folder_selected
 
                     compressed_archive_path = shutil.make_archive(
                         base_name=os.path.join(archive_parent_dir, archive_base_name),
-                        format='xztar', # For high compression
-                        root_dir=output_path # The directory to archive
+                        format='xztar',
+                        root_dir=output_path
                     )
                     if VERBOSE_MODE:
                         print(f"Successfully created archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}")
 
-                    compression_progress_bar.stop() # Stop animation
-                    compression_status_window.destroy() # Close compression status window
+                    compression_progress_bar.stop()
+                    compression_status_window.destroy()
 
-                    # Optional: Ask to delete original uncompressed folder
-                    if messagebox.askyesno("Compression Complete",
-                                            f"Output compressed to:\n{compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
-                                            "Do you want to delete the original uncompressed folder?") :
-                        try:
-                            shutil.rmtree(output_path)
-                            if VERBOSE_MODE:
-                                print(f"Deleted original uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
-                        except Exception as e:
-                            messagebox.showerror("Cleanup Error", f"Failed to delete original folder: {e}")
-                            if VERBOSE_MODE:
-                                print(f"Error deleting original folder: {e}")
+                    # New: Automatically delete uncompressed folder if compression was successful
+                    try:
+                        if VERBOSE_MODE:
+                            print(f"Deleting original uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+                        shutil.rmtree(output_path)
+                    except Exception as e:
+                        errors.append(f"Failed to delete original uncompressed folder '{output_path.encode('utf-8', errors='replace').decode('utf-8')}': {e}")
+                        if VERBOSE_MODE:
+                            print(f"Error deleting original folder: {e}")
 
                 except Exception as e:
                     errors.append(f"Error during compression: {e}")
                     if VERBOSE_MODE:
                         print(f"Error during compression: {e}")
-                    # Ensure progress bar is stopped and window is destroyed even on error
                     if 'compression_progress_bar' in locals() and compression_progress_bar.winfo_exists():
                         compression_progress_bar.stop()
                     if 'compression_status_window' in locals() and compression_status_window.winfo_exists():
                         compression_status_window.destroy()
 
-
             # --- Final Summary Message ---
             summary_message = f"File organization process complete!\n\n" \
-                              f"Original folder scanned: {folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n" \
-                              f"Output generated in: {output_path.encode('utf-8', errors='replace').decode('utf-8')}\n"
+                              f"Source folder: {source_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n" \
+                              f"Destination folder: {destination_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n"
 
             if compressed_archive_path:
-                summary_message += f"Compressed archive created: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
+                summary_message += f"Resulting archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}\n" \
+                                   f"(Uncompressed folder automatically deleted)\n\n"
             else:
-                summary_message += "\n" # Add a newline if no compression
+                summary_message += f"Resulting organized folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
 
             summary_message += f"Total files processed: {processed}\n" \
                                f"Files copied to type folders: {copied}\n" \
@@ -548,79 +559,121 @@ def select_folder_and_run():
                 messagebox.showerror("Organization Complete with Errors", summary_message)
             else:
                 messagebox.showinfo("Organization Complete", summary_message)
-        else:
-            messagebox.showinfo("Cancelled", "File organization cancelled by user.")
-    else:
-        messagebox.showinfo("Cancelled", "No folder selected. File organization cancelled.")
+        else: # output_path was not successfully created (e.g., source not valid, or errors during initial setup)
+            messagebox.showerror("Organization Failed", "The organization process could not be completed, or no output folder was created.\n" + "\n".join(errors))
 
-    root.destroy() # Ensure the root Tkinter window is destroyed when done.
+    else:
+        messagebox.showinfo("Cancelled", "File organization cancelled by user.")
+
+    root.destroy()
 
 # --- Main execution ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Organize files in a specified folder and its subfolders.")
     parser.add_argument(
-        "folder_path",
+        "source_folder_path",
         nargs="?", # Makes the argument optional
-        help="The path to the folder to organize. If not provided, a GUI dialog will open."
+        help="The path to the SOURCE folder to organize. If not provided, a GUI dialog will open."
+    )
+    parser.add_argument(
+        "--destination",
+        help="Specify the DESTINATION folder for the organized output. Defaults to source parent if not provided."
+    )
+    parser.add_argument(
+        "--compress",
+        action="store_true", # Stores True if flag is present
+        help="If specified, the organized output will be compressed into a .tar.xz archive, and the uncompressed output folder will be deleted."
     )
     parser.add_argument(
         "--verbose",
-        action="store_true", # Stores True if flag is present
+        action="store_true",
         help="Enable verbose output to the terminal for debugging."
     )
     args = parser.parse_args()
 
-    # Set the global VERBOSE_MODE flag
     VERBOSE_MODE = args.verbose
 
-    if args.folder_path:
-        # Run in CLI mode if folder_path is provided
-        if not os.path.isdir(args.folder_path):
-            print(f"Error: Provided path '{args.folder_path}' is not a valid directory.")
-        else:
-            total_files = count_files_in_folder(args.folder_path)
-            if total_files == 0:
-                print("No files found in the selected folder or its subfolders to organize.")
-            else:
-                # Pass None for GUI elements when running in CLI mode
-                processed, copied, duplicates, errors, output_path = organize_files_in_folder(
-                    args.folder_path, None, None, total_files
-                )
-                print(f"\n--- Organization Summary for {args.folder_path.encode('utf-8', errors='replace').decode('utf-8')} ---")
-                print(f"Output generated in: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
-                print(f"Total files processed: {processed}")
-                print(f"Files copied to type folders: {copied}")
-                print(f"Duplicate files copied: {duplicates}")
-                if errors:
-                    print("\nErrors encountered:")
-                    for error in errors:
-                        print(f"- {error}")
+    if args.source_folder_path:
+        # CLI mode
+        source_folder_cli = args.source_folder_path
 
-                # CLI mode compression (no checkbox, always compress if output exists)
-                # For CLI, we'll assume compression is desired if the output path is valid
-                if output_path:
+        if not os.path.isdir(source_folder_cli):
+            print(f"Error: Provided source path '{source_folder_cli.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory.")
+            exit(1) # Exit with an error code
+
+        # Determine destination folder for CLI
+        destination_folder_cli = args.destination
+        if not destination_folder_cli:
+            destination_folder_cli = os.path.dirname(source_folder_cli)
+            if VERBOSE_MODE:
+                print(f"No destination folder specified. Defaulting to parent of source: {destination_folder_cli.encode('utf-8', errors='replace').decode('utf-8')}")
+
+        if not os.path.isdir(destination_folder_cli):
+            print(f"Error: Provided destination path '{destination_folder_cli.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory and could not be created.")
+            exit(1) # Exit with an error code
+
+        # Warn if source and destination are effectively the same
+        if os.path.abspath(source_folder_cli) == os.path.abspath(destination_folder_cli):
+            print(f"Warning: Source and destination folders are the same ('{os.path.abspath(source_folder_cli).encode('utf-8', errors='replace').decode('utf-8')}').")
+            print("A new timestamped organization folder will be created inside this directory.")
+
+        total_files = count_files_in_folder(source_folder_cli)
+        if total_files == 0:
+            print("No files found in the selected source folder or its subfolders to organize.")
+            exit(0) # Exit successfully if nothing to do
+
+        print("--- Starting File Organization (CLI Mode) ---")
+        processed, copied, duplicates, errors, output_path = organize_files_in_folder(
+            source_folder_cli, destination_folder_cli, None, None, total_files # No GUI progress in CLI
+        )
+
+        print(f"\n--- Organization Summary for {source_folder_cli.encode('utf-8', errors='replace').decode('utf-8')} ---")
+        print(f"Output intended for: {destination_folder_cli.encode('utf-8', errors='replace').decode('utf-8')}")
+
+        if output_path: # Check if an output folder was successfully created
+            print(f"Organized files written to temporary uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+
+            if args.compress:
+                try:
+                    print(f"\nCLI mode: Compressing '{output_path.encode('utf-8', errors='replace').decode('utf-8')}'...")
+                    archive_base_name = os.path.basename(output_path)
+                    archive_parent_dir = os.path.dirname(output_path) # This is destination_folder_cli
+
+                    compressed_archive_path = shutil.make_archive(
+                        base_name=os.path.join(archive_parent_dir, archive_base_name),
+                        format='xztar',
+                        root_dir=output_path
+                    )
+                    print(f"Successfully created compressed archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}")
+
+                    # Automatically delete original uncompressed folder after successful compression
                     try:
-                        print(f"\nCLI mode: Compressing '{output_path.encode('utf-8', errors='replace').decode('utf-8')}'...")
-                        archive_base_name = os.path.basename(output_path)
-                        archive_parent_dir = os.path.dirname(output_path)
-                        compressed_archive_path = shutil.make_archive(
-                            base_name=os.path.join(archive_parent_dir, archive_base_name),
-                            format='xztar',
-                            root_dir=output_path
-                        )
-                        print(f"Successfully created compressed archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}")
-                        # Optional: Delete original uncompressed folder in CLI mode
-                        # if input("Delete original uncompressed folder? (y/n): ").lower() == 'y':
-                        #     shutil.rmtree(output_path)
-                        #     print(f"Original folder '{output_path.encode('utf-8', errors='replace').decode('utf-8')}' deleted.")
+                        print(f"Deleting original uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+                        shutil.rmtree(output_path)
+                        print("Original uncompressed folder deleted.")
                     except Exception as e:
-                        print(f"Error during CLI compression: {e}")
+                        print(f"Error deleting original uncompressed folder '{output_path.encode('utf-8', errors='replace').decode('utf-8')}': {e}")
+                except Exception as e:
+                    print(f"Error during CLI compression: {e}")
+                    errors.append(f"Error during compression: {e}")
+            else:
+                print(f"Uncompressed organized output folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+        else:
+            print("No organized output folder was created due to errors or no files.")
+
+        print(f"Total files processed: {processed}")
+        print(f"Files copied to type folders: {copied}")
+        print(f"Duplicate files copied: {duplicates}")
+        if errors:
+            print("\nErrors encountered:")
+            for error in errors:
+                print(f"- {error}")
 
     else:
         # Fallback to GUI mode if no folder_path is provided and GUI is available
-        if 'DISPLAY' in os.environ or os.name == 'nt': # Basic check for GUI environment
+        if 'DISPLAY' in os.environ or os.name == 'nt':
             select_folder_and_run()
         else:
-            print("No folder path provided and no GUI detected. Please run this script in an environment that supports Tkinter,")
-            print("or provide the folder path as a command-line argument:")
-            print("Usage: python script_name.py /path/to/your/folder [--verbose]")
+            print("No source folder path provided and no GUI detected. Please run this script in an environment that supports Tkinter,")
+            print("or provide the source folder path as a command-line argument:")
+            print("Usage: python script_name.py /path/to/your/source/folder [--destination /path/to/output] [--compress] [--verbose]")
