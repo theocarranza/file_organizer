@@ -1,6 +1,5 @@
-<<<<<<< HEAD
 # File Organizer Project
-A tool for organizing files, pretty self explanatory
+**A tool for organizing files, pretty self explanatory**
 This script organizes files in a specified folder by type and moves duplicates.
 
 ## Prerequisites
