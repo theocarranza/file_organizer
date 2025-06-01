@@ -7,7 +7,7 @@ from tkinter import ttk
 from datetime import datetime
 import argparse
 import tarfile
-import configparser # Import configparser for remembering paths
+import configparser
 
 # --- Configuration ---
 DUPLICATES_FOLDER_NAME = "duplicates"
@@ -462,7 +462,6 @@ class CustomConfirmationDialog(tk.Toplevel):
         message_label = ttk.Label(content_frame, text=message_text, wraplength=500, justify="left")
         message_label.pack(pady=(0, 20), fill="both", expand=True)
 
-        # Updated checkbox text
         compress_checkbox = ttk.Checkbutton(content_frame, text="Output as compressed .tar.xz archive (saves disk space during process)", variable=self.compress_output)
         compress_checkbox.pack(pady=(5, 15), anchor="w")
 
@@ -505,133 +504,163 @@ class CustomConfirmationDialog(tk.Toplevel):
         self.parent.wait_window(self)
         return self.result, self.compress_output.get()
 
-# --- GUI for folder selection ---
-def select_folder_and_run():
-    """
-    Opens dialogs to select source and destination folders, then runs the organization script.
-    """
-    root = tk.Tk()
-    root.geometry("1x1+2000+2000")
-    root.overrideredirect(True)
 
-    last_source_folder, last_destination_folder = load_last_paths()
+# --- Main Application Class (GUI) ---
+class FileOrganizerApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("File Organizer")
+        master.geometry("400x250")
+        master.resizable(False, False)
 
-    if VERBOSE_MODE:
-        print("Launching source folder selection dialog.")
+        # Center the main window
+        master.update_idletasks()
+        width = master.winfo_width()
+        height = master.winfo_height()
+        x = (master.winfo_screenwidth() // 2) - (width // 2)
+        y = (master.winfo_screenheight() // 2) - (height // 2)
+        master.geometry(f'+{x}+{y}')
 
-    source_folder_selected = filedialog.askdirectory(
-        title="Select SOURCE Folder to Organize (and its subfolders)",
-        initialdir=last_source_folder if last_source_folder else os.getcwd() # Use last path or current working directory
-    )
+        self.create_widgets()
 
-    if not source_folder_selected:
-        messagebox.showinfo("Cancelled", "No source folder selected. File organization cancelled.")
-        root.destroy()
-        return
+    def create_widgets(self):
+        style = ttk.Style()
+        style.configure("TLabel", font=("Arial", 10), padding=5)
+        style.configure("TButton", font=("Arial", 10, "bold"), padding=10)
+        style.configure("Header.TLabel", font=("Arial", 14, "bold"))
 
-    if VERBOSE_MODE:
-        print("Launching destination folder selection dialog.")
+        main_frame = ttk.Frame(self.master, padding=20)
+        main_frame.pack(expand=True, fill="both")
 
-    # Default to parent of source or last destination if available
-    initial_dir_for_dest = last_destination_folder if last_destination_folder else os.path.dirname(source_folder_selected)
+        header_label = ttk.Label(main_frame, text="Welcome to File Organizer", style="Header.TLabel")
+        header_label.pack(pady=(0, 20))
 
-    destination_folder_selected = filedialog.askdirectory(
-        title="Select DESTINATION Folder for the Organized Output",
-        initialdir=initial_dir_for_dest
-    )
+        description_label = ttk.Label(main_frame, text="Organize your files into categorized folders based on their type and extension. Duplicates are handled automatically.", wraplength=350, justify="center")
+        description_label.pack(pady=(0, 30))
 
-    if not destination_folder_selected:
-        messagebox.showinfo("Cancelled", "No destination folder selected. File organization cancelled.")
-        root.destroy()
-        return
+        start_button = ttk.Button(main_frame, text="Start Organization", command=self.start_organization_process)
+        start_button.pack(pady=(0, 10))
 
-    if os.path.abspath(source_folder_selected) == os.path.abspath(destination_folder_selected):
-        warning_result = messagebox.askyesno(
-            "Warning: Same Source and Destination",
-            "You have selected the same folder for both source and destination.\n\n"
-            "If you proceed without compression, a new timestamped organization folder will be created directly inside the source folder.\n"
-            "If you select compression, the archive will be created directly in the source folder.\n"
-            "While this is generally safe, it's often better to choose a separate destination.\n\n"
-            "Do you want to proceed anyway?"
+    def start_organization_process(self):
+        last_source_folder, last_destination_folder = load_last_paths()
+
+        if VERBOSE_MODE:
+            print("Launching source folder selection dialog.")
+
+        source_folder_selected = filedialog.askdirectory(
+            parent=self.master, # Parent the dialog to the main window
+            title="Select SOURCE Folder to Organize (and its subfolders)",
+            initialdir=last_source_folder if last_source_folder else os.getcwd()
         )
-        if not warning_result:
-            messagebox.showinfo("Cancelled", "File organization cancelled by user due to same source/destination.")
-            root.destroy()
+
+        if not source_folder_selected:
+            messagebox.showinfo("Cancelled", "No source folder selected. File organization cancelled.", parent=self.master)
             return
 
-    confirm_dialog = CustomConfirmationDialog(root, source_folder_selected, destination_folder_selected)
-    confirm, compress_checked = confirm_dialog.show()
+        if VERBOSE_MODE:
+            print("Launching destination folder selection dialog.")
 
-    if confirm:
-        total_files = count_files_in_folder(source_folder_selected)
-        if total_files == 0:
-            messagebox.showinfo("No Files Found", "No files found in the selected source folder or its subfolders to organize.")
-            # Still save paths if a valid source/dest was chosen, even if empty
+        initial_dir_for_dest = last_destination_folder if last_destination_folder else os.path.dirname(source_folder_selected)
+
+        destination_folder_selected = filedialog.askdirectory(
+            parent=self.master, # Parent the dialog to the main window
+            title="Select DESTINATION Folder for the Organized Output",
+            initialdir=initial_dir_for_dest
+        )
+
+        if not destination_folder_selected:
+            messagebox.showinfo("Cancelled", "No destination folder selected. File organization cancelled.", parent=self.master)
+            return
+
+        if os.path.abspath(source_folder_selected) == os.path.abspath(destination_folder_selected):
+            warning_result = messagebox.askyesno(
+                "Warning: Same Source and Destination",
+                "You have selected the same folder for both source and destination.\n\n"
+                "If you proceed without compression, a new timestamped organization folder will be created directly inside the source folder.\n"
+                "If you select compression, the archive will be created directly in the source folder.\n"
+                "While this is generally safe, it's often better to choose a separate destination.\n\n"
+                "Do you want to proceed anyway?",
+                parent=self.master
+            )
+            if not warning_result:
+                messagebox.showinfo("Cancelled", "File organization cancelled by user due to same source/destination.", parent=self.master)
+                return
+
+        confirm_dialog = CustomConfirmationDialog(self.master, source_folder_selected, destination_folder_selected)
+        confirm, compress_checked = confirm_dialog.show()
+
+        if confirm:
+            total_files = count_files_in_folder(source_folder_selected)
+            if total_files == 0:
+                messagebox.showinfo("No Files Found", "No files found in the selected source folder or its subfolders to organize.", parent=self.master)
+                save_last_paths(source_folder_selected, destination_folder_selected)
+                return
+
+            progress_window = tk.Toplevel(self.master) # Parent the progress window to the main window
+            progress_window.title("Organizing Files...")
+            progress_window.geometry("550x100")
+            progress_window.resizable(False, False)
+            progress_window.protocol("WM_DELETE_WINDOW", lambda: None) # Prevent closing during operation
+
+            # Center progress window relative to the main window
+            self.master.update_idletasks()
+            x = self.master.winfo_x() + (self.master.winfo_width() // 2) - (progress_window.winfo_width() // 2)
+            y = self.master.winfo_y() + (self.master.winfo_height() // 2) - (progress_window.winfo_height() // 2)
+            progress_window.geometry(f"+{x}+{y}")
+
+            progress_window.lift()
+            progress_window.attributes('-topmost', True)
+            progress_window.focus_force()
+            progress_window.after_idle(progress_window.attributes, '-topmost', False)
+
+            status_label = tk.Label(progress_window, text="Preparing...", pady=10)
+            status_label.pack()
+
+            progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=500, mode="determinate")
+            progress_bar.pack(pady=5)
+
+            # Run the organization in a way that allows GUI to update
+            # This is a simple approach; for very long operations, threading might be considered
+            # but it adds complexity. For file copying, it's usually acceptable.
+            processed, added_to_output, duplicates, errors, final_output_path = organize_files_in_folder(
+                source_folder_selected, destination_folder_selected, compress_checked, progress_bar, status_label, total_files
+            )
+
+            progress_window.destroy()
+
             save_last_paths(source_folder_selected, destination_folder_selected)
-            root.destroy()
-            return
 
-        progress_window = tk.Toplevel(root)
-        progress_window.title("Organizing Files...")
-        progress_window.geometry("550x100") # Increased width to accommodate longer text
-        progress_window.resizable(False, False)
-        progress_window.protocol("WM_DELETE_WINDOW", lambda: None)
+            # --- Final Summary Message ---
+            summary_message = f"File organization process complete!\n\n" \
+                              f"Source folder: {source_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n" \
+                              f"Destination folder: {destination_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n"
 
-        root.update_idletasks()
-        x = root.winfo_x() + (root.winfo_width() // 2) - (progress_window.winfo_width() // 2)
-        y = root.winfo_y() + (root.winfo_height() // 2) - (progress_window.winfo_height() // 2)
-        progress_window.geometry(f"+{x}+{y}")
-
-        progress_window.lift()
-        progress_window.attributes('-topmost', True)
-        progress_window.focus_force()
-        progress_window.after_idle(progress_window.attributes, '-topmost', False)
-
-        status_label = tk.Label(progress_window, text="Preparing...", pady=10)
-        status_label.pack()
-
-        progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=500, mode="determinate") # Increased length
-        progress_bar.pack(pady=5)
-
-        processed, added_to_output, duplicates, errors, final_output_path = organize_files_in_folder(
-            source_folder_selected, destination_folder_selected, compress_checked, progress_bar, status_label, total_files
-        )
-
-        progress_window.destroy()
-
-        # Save paths after operation, regardless of success (user might want to fix errors and retry)
-        save_last_paths(source_folder_selected, destination_folder_selected)
-
-        # --- Final Summary Message ---
-        summary_message = f"File organization process complete!\n\n" \
-                          f"Source folder: {source_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n" \
-                          f"Destination folder: {destination_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n"
-
-        if final_output_path:
-            if compress_checked:
-                summary_message += f"Resulting archive: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}\n" \
-                                   f"(No temporary uncompressed folder created)\n\n"
+            if final_output_path:
+                if compress_checked:
+                    summary_message += f"Resulting archive: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}\n" \
+                                       f"(No temporary uncompressed folder created)\n\n"
+                else:
+                    summary_message += f"Resulting organized folder: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
             else:
-                summary_message += f"Resulting organized folder: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
+                summary_message += "\nNo output file/folder was created (potentially due to errors or no files processed).\n\n"
+
+            summary_message += f"Total files processed: {processed}\n" \
+                               f"Files copied/added to output: {added_to_output}\n" \
+                               f"Duplicate files copied/added: {duplicates}\n\n"
+
+            if errors:
+                summary_message += f"Errors encountered during process ({len(errors)}):\n"
+                for i, error in enumerate(errors):
+                    summary_message += f"- {error}\n"
+                messagebox.showerror("Organization Complete with Errors", summary_message, parent=self.master)
+            else:
+                message_title = "Organization Complete"
+                if processed == 0:
+                    message_title = "Organization Complete (No files processed)"
+                messagebox.showinfo(message_title, summary_message, parent=self.master)
+
         else:
-            summary_message += "\nNo output file/folder was created (potentially due to errors or no files processed).\n\n"
-
-        summary_message += f"Total files processed: {processed}\n" \
-                           f"Files copied/added to output: {added_to_output}\n" \
-                           f"Duplicate files copied/added: {duplicates}\n\n"
-
-        if errors:
-            summary_message += f"Errors encountered during process ({len(errors)}):\n"
-            for i, error in enumerate(errors):
-                summary_message += f"- {error}\n"
-            messagebox.showerror("Organization Complete with Errors", summary_message)
-        else:
-            messagebox.showinfo("Organization Complete", summary_message)
-
-    else:
-        messagebox.showinfo("Cancelled", "File organization cancelled by user.")
-
-    root.destroy()
+            messagebox.showinfo("Cancelled", "File organization cancelled by user.", parent=self.master)
 
 # --- Main execution ---
 if __name__ == "__main__":
@@ -718,8 +747,12 @@ if __name__ == "__main__":
                 print(f"- {error}")
 
     else:
-        if 'DISPLAY' in os.environ or os.name == 'nt':
-            select_folder_and_run()
+        # GUI mode
+        # Check if a display is available before launching GUI
+        if 'DISPLAY' in os.environ or os.name == 'nt' or os.name == 'posix' and os.getenv('TERM_PROGRAM') == 'vscode':
+            root = tk.Tk()
+            app = FileOrganizerApp(root)
+            root.mainloop()
         else:
             print("No source folder path provided and no GUI detected. Please run this script in an environment that supports Tkinter,")
             print("or provide the source folder path as a command-line argument:")
