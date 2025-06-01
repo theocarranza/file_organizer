@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 from datetime import datetime
 import argparse
+import tarfile # Import the tarfile module
 
 # --- Configuration ---
 DUPLICATES_FOLDER_NAME = "duplicates"
@@ -149,11 +150,12 @@ def count_files_in_folder(target_folder_path):
     # Note: We need to exclude the actual names of the top-level folders that will be created
     # based on FILE_TYPE_GROUPS.keys(), plus the special folders.
     # This list is used only for counting, not for os.walk pruning in organize_files_in_folder
+    # When compressing directly, these don't exist on disk anyway, so the exclusion is less critical
+    # but still good practice for general counting.
     top_level_group_names_for_counting_exclusion = list(FILE_TYPE_GROUPS.keys()) + [DUPLICATES_FOLDER_NAME, OTHER_FOLDER_NAME]
 
     for dirpath, dirnames, filenames in os.walk(target_folder_path):
         # Prune dirnames to avoid counting files in our own organizational folders
-        # This is important for accurate file count if re-running on an already organized folder.
         dirnames[:] = [d for d in dirnames if d not in top_level_group_names_for_counting_exclusion]
 
         for item_name in filenames:
@@ -161,15 +163,16 @@ def count_files_in_folder(target_folder_path):
     return count
 
 
-def organize_files_in_folder(target_folder_path, destination_root_folder, progress_bar=None, status_label=None, total_files_to_process=0):
+def organize_files_in_folder(target_folder_path, destination_root_folder, compress_output_flag, progress_bar=None, status_label=None, total_files_to_process=0):
     """
-    Organizes files in the specified folder and its subfolders by type and handles duplicates.
-    All organized files and duplicates are COPIED to subfolders directly under a new timestamped output folder.
+    Organizes files in the specified folder and its subfolders.
+    If compress_output_flag is True, files are added directly to a compressed archive.
+    Otherwise, files are COPIED to a new timestamped output folder.
     Includes progress bar updates (if GUI elements are provided).
     """
     error_messages = []
     processed_files_count = 0
-    copied_files_count = 0
+    copied_files_count = 0 # Renamed to files_added_to_output for clarity with archiving
     duplicate_files_count = 0
 
     if not os.path.isdir(target_folder_path):
@@ -181,25 +184,39 @@ def organize_files_in_folder(target_folder_path, destination_root_folder, progre
             error_messages.append(f"The destination path '{destination_root_folder.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory and could not be created.")
             return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
 
-
-    # --- 1. Setup New Output Folder ---
+    # --- Setup Output ---
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     original_folder_name = os.path.basename(target_folder_path)
 
-    root_output_folder_name = f"file_organizer_{original_folder_name}_{timestamp}"
-    # The organized output folder will be created INSIDE the user-selected destination_root_folder
-    root_output_folder_path = os.path.join(destination_root_folder, root_output_folder_name)
+    root_output_folder_path = None # Will be set only if not compressing
+    final_output_path = "" # Will be the path to the folder OR archive
 
-    if not create_directory_if_not_exists(root_output_folder_path, error_messages):
-        return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
+    tar = None
+    if compress_output_flag:
+        archive_name = f"file_organizer_{original_folder_name}_{timestamp}.tar.xz"
+        final_output_path = os.path.join(destination_root_folder, archive_name)
+        try:
+            tar = tarfile.open(final_output_path, 'w:xz') # Open for writing with XZ compression
+            if VERBOSE_MODE:
+                print(f"Opened archive for direct writing: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+        except Exception as e:
+            error_messages.append(f"Error opening archive file '{final_output_path.encode('utf-8', errors='replace').decode('utf-8')}': {e}")
+            return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
+    else:
+        root_output_folder_name = f"file_organizer_{original_folder_name}_{timestamp}"
+        root_output_folder_path = os.path.join(destination_root_folder, root_output_folder_name)
+        final_output_path = root_output_folder_path # The folder is the final output
 
-    # Create the main "duplicates" folder within the new root output folder
-    duplicates_main_folder_path = os.path.join(root_output_folder_path, DUPLICATES_FOLDER_NAME)
-    if not create_directory_if_not_exists(duplicates_main_folder_path, error_messages):
-        return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
+        if not create_directory_if_not_exists(root_output_folder_path, error_messages):
+            return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
+
+        # Create the main "duplicates" folder within the new root output folder for uncompressed mode
+        duplicates_main_folder_path = os.path.join(root_output_folder_path, DUPLICATES_FOLDER_NAME)
+        if not create_directory_if_not_exists(duplicates_main_folder_path, error_messages):
+            return processed_files_count, copied_files_count, duplicate_files_count, error_messages, ""
 
     # This dictionary will store file hashes to detect duplicates.
-    # Key: file_hash, Value: path of the first encountered (original) file in the new output folder
+    # Key: file_hash, Value: path of the first encountered (original) file (either disk path or archive internal path)
     known_file_hashes = {}
 
     # Set progress bar maximum if GUI elements are available
@@ -208,21 +225,20 @@ def organize_files_in_folder(target_folder_path, destination_root_folder, progre
         current_file_index = 0
         if VERBOSE_MODE:
             print(f"\nStarting recursive file organization from: {target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
-            print(f"Output will be generated in: {root_output_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
+            print(f"Output will be generated as: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
             print("--------------------------------------------------")
-    elif VERBOSE_MODE: # Only print this if not in GUI mode but verbose is on
+    elif VERBOSE_MODE:
         print(f"\nStarting recursive file organization from: {target_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
-        print(f"Output will be generated in: {root_output_folder_path.encode('utf-8', errors='replace').decode('utf-8')}")
+        print(f"Output will be generated as: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
         print("--------------------------------------------------")
 
-
-    # --- 2. Iterate through files in the target directory and its subdirectories ---
+    # --- Iterate through files in the target directory and its subdirectories ---
     for dirpath, dirnames, filenames in os.walk(target_folder_path):
-        # IMPORTANT: Prune dirnames in-place to prevent os.walk from descending into
+        # Prune dirnames in-place to prevent os.walk from descending into
         # our *own output* organizational folders if they happen to be inside the source tree.
-        # This ensures we don't try to re-process files already copied to the output.
-        # We only exclude the root output folder itself and the duplicates folder.
-        dirnames[:] = [d for d in dirnames if d != os.path.basename(root_output_folder_path) and d != DUPLICATES_FOLDER_NAME]
+        # This is primarily relevant for uncompressed output.
+        if root_output_folder_path: # Only relevant if uncompressed folder is created
+             dirnames[:] = [d for d in dirnames if d != os.path.basename(root_output_folder_path) and d != DUPLICATES_FOLDER_NAME]
 
         if VERBOSE_MODE:
             print(f"\nScanning directory: {dirpath.encode('utf-8', errors='replace').decode('utf-8')}")
@@ -230,17 +246,16 @@ def organize_files_in_folder(target_folder_path, destination_root_folder, progre
         for item_name in filenames:
             item_path = os.path.join(dirpath, item_name)
 
-            # Update progress bar and status label if GUI elements are available
             if progress_bar and status_label:
                 current_file_index += 1
                 progress_bar['value'] = current_file_index
                 status_label.config(text=f"Processing: {item_name.encode('utf-8', errors='replace').decode('utf-8')}")
-                progress_bar.master.update_idletasks() # Update the progress window
-                progress_bar.master.update() # Process events
+                progress_bar.master.update_idletasks()
+                progress_bar.master.update()
 
-            # Skip if the file is already in one of our organizational folders (e.g., if re-running on an already organized folder)
-            # This check is more robust since the `dirnames` pruning is for directories.
-            if item_path.startswith(root_output_folder_path):
+            # If not compressing, skip files already in the output folder.
+            # This check is only relevant if uncompressed output is being created on disk.
+            if not compress_output_flag and root_output_folder_path and item_path.startswith(root_output_folder_path):
                 if VERBOSE_MODE:
                     print(f"Skipping file: '{item_name.encode('utf-8', errors='replace').decode('utf-8')}' (already in new output folder).")
                 continue
@@ -249,25 +264,35 @@ def organize_files_in_folder(target_folder_path, destination_root_folder, progre
             if VERBOSE_MODE:
                 print(f"Processing file: {item_name.encode('utf-8', errors='replace').decode('utf-8')} (from {dirpath.encode('utf-8', errors='replace').decode('utf-8')})")
 
-            # --- 3. Handle Duplicates ---
             file_hash = calculate_file_hash(item_path)
-            if file_hash is None: # Hash calculation failed (e.g., file disappeared)
+            if file_hash is None:
                 error_messages.append(f"Could not calculate hash for '{item_name.encode('utf-8', errors='replace').decode('utf-8')}' in '{dirpath.encode('utf-8', errors='replace').decode('utf-8')}'. Skipping.")
                 if VERBOSE_MODE:
                     print(f"Skipping file {item_name.encode('utf-8', errors='replace').decode('utf-8')} due to hash calculation error.")
                 continue
 
+            # --- Handle Duplicates ---
             if file_hash in known_file_hashes:
-                # This file is a duplicate of a previously processed file.
                 if VERBOSE_MODE:
                     original_file_path = known_file_hashes[file_hash]
                     print(f"Duplicate found: '{item_name.encode('utf-8', errors='replace').decode('utf-8')}' is a duplicate of '{os.path.basename(original_file_path).encode('utf-8', errors='replace').decode('utf-8')}'.")
 
-                if copy_file_with_feedback(item_path, duplicates_main_folder_path, item_name, error_messages):
-                    duplicate_files_count += 1
-                continue # Move to the next file
+                if compress_output_flag:
+                    try:
+                        # Add duplicate to archive under a special duplicates path
+                        arcname_in_archive = os.path.join(DUPLICATES_FOLDER_NAME, item_name)
+                        if VERBOSE_MODE:
+                            print(f"  Adding duplicate to archive as: {arcname_in_archive.encode('utf-8', errors='replace').decode('utf-8')}")
+                        tar.add(item_path, arcname=arcname_in_archive) # Add directly by path, tarfile handles internal details
+                        duplicate_files_count += 1
+                    except Exception as e:
+                        error_messages.append(f"Error adding duplicate '{item_name.encode('utf-8', errors='replace').decode('utf-8')}' to archive: {e}")
+                else:
+                    if copy_file_with_feedback(item_path, duplicates_main_folder_path, item_name, error_messages):
+                        duplicate_files_count += 1
+                continue
 
-            # --- 4. Process Original File: Categorize and Copy ---
+            # --- Process Original File: Categorize and Copy/Add to Archive ---
             file_name_proper, file_extension = os.path.splitext(item_name)
 
             if VERBOSE_MODE:
@@ -275,33 +300,70 @@ def organize_files_in_folder(target_folder_path, destination_root_folder, progre
 
             top_level_folder_name, sub_folder_name = get_categorized_paths(file_extension, file_name_proper)
 
-            # First, ensure the top-level category folder exists within the root output folder
-            current_top_level_path = os.path.join(root_output_folder_path, top_level_folder_name)
-            if not create_directory_if_not_exists(current_top_level_path, error_messages):
-                error_messages.append(f"Skipping file {item_name.encode('utf-8', errors='replace').decode('utf-8')} as its top-level category folder '{current_top_level_path.encode('utf-8', errors='replace').decode('utf-8')}' could not be created.")
-                continue
-
-            # Then, ensure the sub-folder for the specific extension exists within the top-level category
-            specific_type_folder_path = os.path.join(current_top_level_path, sub_folder_name)
-            if not create_directory_if_not_exists(specific_type_folder_path, error_messages):
-                error_messages.append(f"Skipping file {item_name.encode('utf-8', errors='replace').decode('utf-8')} as its sub-folder '{specific_type_folder_path.encode('utf-8', errors='replace').decode('utf-8')}' could not be created.")
-                continue
-
-            # Copy the original file to its type folder
-            copied_file_actual_path = copy_file_with_feedback(item_path, specific_type_folder_path, item_name, error_messages)
-
-            if copied_file_actual_path:
-                # If successfully copied, record its hash and new path
-                known_file_hashes[file_hash] = copied_file_actual_path
-                copied_files_count += 1
+            if compress_output_flag:
+                try:
+                    # Construct the path inside the archive
+                    arcname_in_archive = os.path.join(top_level_folder_name, sub_folder_name, item_name)
+                    if VERBOSE_MODE:
+                        print(f"  Adding original to archive as: {arcname_in_archive.encode('utf-8', errors='replace').decode('utf-8')}")
+                    tar.add(item_path, arcname=arcname_in_archive) # Add directly by path, tarfile handles internal details
+                    known_file_hashes[file_hash] = arcname_in_archive # Store archive internal path
+                    copied_files_count += 1
+                except Exception as e:
+                    error_messages.append(f"Error adding file '{item_name.encode('utf-8', errors='replace').decode('utf-8')}' to archive: {e}")
             else:
-                error_messages.append(f"Failed to copy '{item_name.encode('utf-8', errors='replace').decode('utf-8')}', it will not be recorded as an original for duplicate checking.")
+                # Normal uncompressed copy process
+                current_top_level_path = os.path.join(root_output_folder_path, top_level_folder_name)
+                if not create_directory_if_not_exists(current_top_level_path, error_messages):
+                    error_messages.append(f"Skipping file {item_name.encode('utf-8', errors='replace').decode('utf-8')} as its top-level category folder '{current_top_level_path.encode('utf-8', errors='replace').decode('utf-8')}' could not be created.")
+                    continue
+
+                specific_type_folder_path = os.path.join(current_top_level_path, sub_folder_name)
+                if not create_directory_if_not_exists(specific_type_folder_path, error_messages):
+                    error_messages.append(f"Skipping file {item_name.encode('utf-8', errors='replace').decode('utf-8')} as its sub-folder '{specific_type_folder_path.encode('utf-8', errors='replace').decode('utf-8')}' could not be created.")
+                    continue
+
+                copied_file_actual_path = copy_file_with_feedback(item_path, specific_type_folder_path, item_name, error_messages)
+
+                if copied_file_actual_path:
+                    known_file_hashes[file_hash] = copied_file_actual_path
+                    copied_files_count += 1
+                else:
+                    error_messages.append(f"Failed to copy '{item_name.encode('utf-8', errors='replace').decode('utf-8')}', it will not be recorded as an original for duplicate checking.")
+
+    # Close the tarfile if it was opened
+    if tar:
+        try:
+            tar.close()
+            if VERBOSE_MODE:
+                print(f"Archive closed: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+        except Exception as e:
+            error_messages.append(f"Error closing archive file '{final_output_path.encode('utf-8', errors='replace').decode('utf-8')}': {e}")
+            # If an error occurred during closing, the archive might be corrupt or incomplete.
+            # Consider cleaning up the incomplete archive if appropriate.
+            if os.path.exists(final_output_path):
+                try:
+                    os.remove(final_output_path)
+                    error_messages.append(f"Removed incomplete archive due to error: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+                except Exception as clean_e:
+                    error_messages.append(f"Failed to remove incomplete archive '{final_output_path.encode('utf-8', errors='replace').decode('utf-8')}': {clean_e}")
+            final_output_path = "" # Indicate failure to create archive
+
+    # Clean up empty archive if no files were processed AND compression was intended
+    if compress_output_flag and processed_files_count == 0 and final_output_path and os.path.exists(final_output_path):
+        try:
+            os.remove(final_output_path)
+            if VERBOSE_MODE:
+                print(f"Removed empty archive as no files were processed: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+            final_output_path = "" # Indicate no output
+        except Exception as e:
+            error_messages.append(f"Failed to remove empty archive '{final_output_path.encode('utf-8', errors='replace').decode('utf-8')}': {e}")
 
     if VERBOSE_MODE:
         print("\n--------------------------------------------------")
         print("File organization process complete.")
 
-    return processed_files_count, copied_files_count, duplicate_files_count, error_messages, root_output_folder_path
+    return processed_files_count, copied_files_count, duplicate_files_count, error_messages, final_output_path
 
 # --- Custom Confirmation Dialog ---
 class CustomConfirmationDialog(tk.Toplevel):
@@ -334,14 +396,15 @@ class CustomConfirmationDialog(tk.Toplevel):
                        f"Files will be organized into main categories (e.g., 'images', 'documents') " \
                        f"with subfolders for specific extensions (e.g., 'images/jpg').\n" \
                        f"Less common file types will be grouped under an '{OTHER_FOLDER_NAME}' folder.\n" \
-                       f"Duplicates will be copied to a '{DUPLICATES_FOLDER_NAME}' folder.\n\n" \
-                       f"A NEW timestamped output folder will be created inside the chosen destination." \
+                       f"Duplicates will be handled separately (copied to a '{DUPLICATES_FOLDER_NAME}' category).\n\n" \
+                       f"A NEW timestamped output (folder or archive) will be created inside the chosen destination." \
                        f"It's highly recommended to BACK UP YOUR FILES before proceeding."
 
         message_label = ttk.Label(content_frame, text=message_text, wraplength=500, justify="left")
         message_label.pack(pady=(0, 20), fill="both", expand=True)
 
-        compress_checkbox = ttk.Checkbutton(content_frame, text="Compress output (.tar.xz) and delete uncompressed folder", variable=self.compress_output)
+        # Updated checkbox text
+        compress_checkbox = ttk.Checkbutton(content_frame, text="Output as compressed .tar.xz archive (saves disk space during process)", variable=self.compress_output)
         compress_checkbox.pack(pady=(5, 15), anchor="w")
 
         button_frame = ttk.Frame(content_frame)
@@ -360,7 +423,7 @@ class CustomConfirmationDialog(tk.Toplevel):
         height = self.winfo_reqheight()
 
         width = max(width + 30, 550)
-        height = max(height + 30, 350) # Slightly increased height
+        height = max(height + 30, 350)
 
         x = self.parent.winfo_x() + (self.parent.winfo_width() // 2) - (width // 2)
         y = self.parent.winfo_y() + (self.parent.winfo_height() // 2) - (height // 2)
@@ -402,11 +465,9 @@ def select_folder_and_run():
         root.destroy()
         return
 
-    # New: Ask for Destination Folder
     if VERBOSE_MODE:
         print("Launching destination folder selection dialog.")
 
-    # Suggest parent of source_folder_selected as default
     initial_dir_for_dest = os.path.dirname(source_folder_selected)
 
     destination_folder_selected = filedialog.askdirectory(
@@ -419,12 +480,12 @@ def select_folder_and_run():
         root.destroy()
         return
 
-    # Check if source and destination are the same (or very similar)
     if os.path.abspath(source_folder_selected) == os.path.abspath(destination_folder_selected):
         warning_result = messagebox.askyesno(
             "Warning: Same Source and Destination",
             "You have selected the same folder for both source and destination.\n\n"
-            "This will create a new timestamped organization folder directly inside the source folder.\n"
+            "If you proceed without compression, a new timestamped organization folder will be created directly inside the source folder.\n"
+            "If you select compression, the archive will be created directly in the source folder.\n"
             "While this is generally safe, it's often better to choose a separate destination.\n\n"
             "Do you want to proceed anyway?"
         )
@@ -433,8 +494,6 @@ def select_folder_and_run():
             root.destroy()
             return
 
-
-    # Use custom confirmation dialog
     confirm_dialog = CustomConfirmationDialog(root, source_folder_selected, destination_folder_selected)
     confirm, compress_checked = confirm_dialog.show()
 
@@ -467,100 +526,41 @@ def select_folder_and_run():
         progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=300, mode="determinate")
         progress_bar.pack(pady=5)
 
-        # Pass the destination_folder_selected to the organization logic
-        processed, copied, duplicates, errors, output_path = organize_files_in_folder(
-            source_folder_selected, destination_folder_selected, progress_bar, status_label, total_files
+        # Pass the destination_folder_selected and the compress_checked flag
+        processed, copied, duplicates, errors, final_output_path = organize_files_in_folder(
+            source_folder_selected, destination_folder_selected, compress_checked, progress_bar, status_label, total_files
         )
 
         progress_window.destroy()
 
-        compressed_archive_path = None
-        if output_path: # Ensure organization actually produced an output folder
+        # No separate compression step or deletion of uncompressed folder here.
+        # It's all handled inside organize_files_in_folder now.
+
+        # --- Final Summary Message ---
+        summary_message = f"File organization process complete!\n\n" \
+                          f"Source folder: {source_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n" \
+                          f"Destination folder: {destination_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n"
+
+        if final_output_path:
             if compress_checked:
-                try:
-                    compression_status_window = tk.Toplevel(root)
-                    compression_status_window.title("Compressing Output...")
-                    compression_status_window.geometry("300x100")
-                    compression_status_window.resizable(False, False)
-                    compression_status_window.protocol("WM_DELETE_WINDOW", lambda: None)
-
-                    x = root.winfo_x() + (root.winfo_width() // 2) - (compression_status_window.winfo_width() // 2)
-                    y = root.winfo_y() + (root.winfo_height() // 2) - (compression_status_window.winfo_height() // 2)
-                    compression_status_window.geometry(f"+{x}+{y}")
-
-                    compression_label = tk.Label(compression_status_window, text="Compressing files, please wait...", pady=10)
-                    compression_label.pack()
-
-                    compression_progress_bar = ttk.Progressbar(compression_status_window, orient="horizontal", length=250, mode="indeterminate")
-                    compression_progress_bar.pack(pady=5)
-                    compression_progress_bar.start(10)
-
-                    compression_status_window.update_idletasks()
-                    compression_status_window.lift()
-                    compression_status_window.attributes('-topmost', True)
-                    compression_status_window.focus_force()
-                    compression_status_window.after_idle(compression_status_window.attributes, '-topmost', False)
-
-                    if VERBOSE_MODE:
-                        print(f"\nCompression requested. Compressing '{output_path.encode('utf-8', errors='replace').decode('utf-8')}'...")
-
-                    archive_base_name = os.path.basename(output_path)
-                    archive_parent_dir = os.path.dirname(output_path) # This is the destination_folder_selected
-
-                    compressed_archive_path = shutil.make_archive(
-                        base_name=os.path.join(archive_parent_dir, archive_base_name),
-                        format='xztar',
-                        root_dir=output_path
-                    )
-                    if VERBOSE_MODE:
-                        print(f"Successfully created archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}")
-
-                    compression_progress_bar.stop()
-                    compression_status_window.destroy()
-
-                    # New: Automatically delete uncompressed folder if compression was successful
-                    try:
-                        if VERBOSE_MODE:
-                            print(f"Deleting original uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
-                        shutil.rmtree(output_path)
-                    except Exception as e:
-                        errors.append(f"Failed to delete original uncompressed folder '{output_path.encode('utf-8', errors='replace').decode('utf-8')}': {e}")
-                        if VERBOSE_MODE:
-                            print(f"Error deleting original folder: {e}")
-
-                except Exception as e:
-                    errors.append(f"Error during compression: {e}")
-                    if VERBOSE_MODE:
-                        print(f"Error during compression: {e}")
-                    if 'compression_progress_bar' in locals() and compression_progress_bar.winfo_exists():
-                        compression_progress_bar.stop()
-                    if 'compression_status_window' in locals() and compression_status_window.winfo_exists():
-                        compression_status_window.destroy()
-
-            # --- Final Summary Message ---
-            summary_message = f"File organization process complete!\n\n" \
-                              f"Source folder: {source_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n" \
-                              f"Destination folder: {destination_folder_selected.encode('utf-8', errors='replace').decode('utf-8')}\n"
-
-            if compressed_archive_path:
-                summary_message += f"Resulting archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}\n" \
-                                   f"(Uncompressed folder automatically deleted)\n\n"
+                summary_message += f"Resulting archive: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}\n" \
+                                   f"(No temporary uncompressed folder created)\n\n"
             else:
-                summary_message += f"Resulting organized folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
+                summary_message += f"Resulting organized folder: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}\n\n"
+        else:
+            summary_message += "\nNo output file/folder was created.\n\n"
 
-            summary_message += f"Total files processed: {processed}\n" \
-                               f"Files copied to type folders: {copied}\n" \
-                               f"Duplicate files copied to '{DUPLICATES_FOLDER_NAME}': {duplicates}\n\n"
+        summary_message += f"Total files processed: {processed}\n" \
+                           f"Files copied/added to output: {copied}\n" \
+                           f"Duplicate files copied/added: {duplicates}\n\n"
 
-            if errors:
-                summary_message += f"Errors encountered during process ({len(errors)}):\n"
-                for i, error in enumerate(errors):
-                    summary_message += f"- {error}\n"
-                messagebox.showerror("Organization Complete with Errors", summary_message)
-            else:
-                messagebox.showinfo("Organization Complete", summary_message)
-        else: # output_path was not successfully created (e.g., source not valid, or errors during initial setup)
-            messagebox.showerror("Organization Failed", "The organization process could not be completed, or no output folder was created.\n" + "\n".join(errors))
+        if errors:
+            summary_message += f"Errors encountered during process ({len(errors)}):\n"
+            for i, error in enumerate(errors):
+                summary_message += f"- {error}\n"
+            messagebox.showerror("Organization Complete with Errors", summary_message)
+        else:
+            messagebox.showinfo("Organization Complete", summary_message)
 
     else:
         messagebox.showinfo("Cancelled", "File organization cancelled by user.")
@@ -572,7 +572,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Organize files in a specified folder and its subfolders.")
     parser.add_argument(
         "source_folder_path",
-        nargs="?", # Makes the argument optional
+        nargs="?",
         help="The path to the SOURCE folder to organize. If not provided, a GUI dialog will open."
     )
     parser.add_argument(
@@ -581,8 +581,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--compress",
-        action="store_true", # Stores True if flag is present
-        help="If specified, the organized output will be compressed into a .tar.xz archive, and the uncompressed output folder will be deleted."
+        action="store_true",
+        help="If specified, the organized output will be compressed into a .tar.xz archive directly, without creating an intermediate uncompressed folder."
     )
     parser.add_argument(
         "--verbose",
@@ -599,9 +599,8 @@ if __name__ == "__main__":
 
         if not os.path.isdir(source_folder_cli):
             print(f"Error: Provided source path '{source_folder_cli.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory.")
-            exit(1) # Exit with an error code
+            exit(1)
 
-        # Determine destination folder for CLI
         destination_folder_cli = args.destination
         if not destination_folder_cli:
             destination_folder_cli = os.path.dirname(source_folder_cli)
@@ -610,67 +609,47 @@ if __name__ == "__main__":
 
         if not os.path.isdir(destination_folder_cli):
             print(f"Error: Provided destination path '{destination_folder_cli.encode('utf-8', errors='replace').decode('utf-8')}' is not a valid directory and could not be created.")
-            exit(1) # Exit with an error code
+            exit(1)
 
-        # Warn if source and destination are effectively the same
         if os.path.abspath(source_folder_cli) == os.path.abspath(destination_folder_cli):
             print(f"Warning: Source and destination folders are the same ('{os.path.abspath(source_folder_cli).encode('utf-8', errors='replace').decode('utf-8')}').")
-            print("A new timestamped organization folder will be created inside this directory.")
+            if args.compress:
+                print("The archive will be created directly in this folder.")
+            else:
+                print("A new timestamped organization folder will be created inside this directory.")
 
         total_files = count_files_in_folder(source_folder_cli)
         if total_files == 0:
             print("No files found in the selected source folder or its subfolders to organize.")
-            exit(0) # Exit successfully if nothing to do
+            exit(0)
 
         print("--- Starting File Organization (CLI Mode) ---")
-        processed, copied, duplicates, errors, output_path = organize_files_in_folder(
-            source_folder_cli, destination_folder_cli, None, None, total_files # No GUI progress in CLI
+        # Pass compress_output_flag (args.compress) directly
+        processed, copied, duplicates, errors, final_output_path = organize_files_in_folder(
+            source_folder_cli, destination_folder_cli, args.compress, None, None, total_files
         )
 
         print(f"\n--- Organization Summary for {source_folder_cli.encode('utf-8', errors='replace').decode('utf-8')} ---")
         print(f"Output intended for: {destination_folder_cli.encode('utf-8', errors='replace').decode('utf-8')}")
 
-        if output_path: # Check if an output folder was successfully created
-            print(f"Organized files written to temporary uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
-
+        if final_output_path:
             if args.compress:
-                try:
-                    print(f"\nCLI mode: Compressing '{output_path.encode('utf-8', errors='replace').decode('utf-8')}'...")
-                    archive_base_name = os.path.basename(output_path)
-                    archive_parent_dir = os.path.dirname(output_path) # This is destination_folder_cli
-
-                    compressed_archive_path = shutil.make_archive(
-                        base_name=os.path.join(archive_parent_dir, archive_base_name),
-                        format='xztar',
-                        root_dir=output_path
-                    )
-                    print(f"Successfully created compressed archive: {compressed_archive_path.encode('utf-8', errors='replace').decode('utf-8')}")
-
-                    # Automatically delete original uncompressed folder after successful compression
-                    try:
-                        print(f"Deleting original uncompressed folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
-                        shutil.rmtree(output_path)
-                        print("Original uncompressed folder deleted.")
-                    except Exception as e:
-                        print(f"Error deleting original uncompressed folder '{output_path.encode('utf-8', errors='replace').decode('utf-8')}': {e}")
-                except Exception as e:
-                    print(f"Error during CLI compression: {e}")
-                    errors.append(f"Error during compression: {e}")
+                print(f"Resulting archive: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+                print("(No temporary uncompressed folder created)")
             else:
-                print(f"Uncompressed organized output folder: {output_path.encode('utf-8', errors='replace').decode('utf-8')}")
+                print(f"Uncompressed organized output folder: {final_output_path.encode('utf-8', errors='replace').decode('utf-8')}")
         else:
-            print("No organized output folder was created due to errors or no files.")
+            print("No organized output file/folder was created due to errors or no files processed.")
 
         print(f"Total files processed: {processed}")
-        print(f"Files copied to type folders: {copied}")
-        print(f"Duplicate files copied: {duplicates}")
+        print(f"Files copied/added to output: {copied}")
+        print(f"Duplicate files copied/added: {duplicates}")
         if errors:
             print("\nErrors encountered:")
             for error in errors:
                 print(f"- {error}")
 
     else:
-        # Fallback to GUI mode if no folder_path is provided and GUI is available
         if 'DISPLAY' in os.environ or os.name == 'nt':
             select_folder_and_run()
         else:
