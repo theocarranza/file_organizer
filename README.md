@@ -1,5 +1,6 @@
+<<<<<<< HEAD
 # File Organizer Project
-
+A tool for organizing files, pretty self explanatory
 This script organizes files in a specified folder by type and moves duplicates.
 
 ## Prerequisites
@@ -33,3 +34,5 @@ Ensure the `python3-tk` package (or equivalent) is installed.
 Activate the virtual environment, then run:
 ```bash
 python file_organizer.py
+=======
+>>>>>>> main
